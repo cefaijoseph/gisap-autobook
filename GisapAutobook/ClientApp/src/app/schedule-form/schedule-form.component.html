@@ -1,0 +1,86 @@
+<mat-card class="form-card">
+  <mat-card-title>{{ isNew ? 'New Schedule' : 'Edit Schedule' }}</mat-card-title>
+
+  <mat-card-content>
+    <form #f="ngForm" (ngSubmit)="save()">
+
+      <mat-form-field class="full-width">
+        <mat-label>Schedule Name</mat-label>
+        <input matInput name="name" [(ngModel)]="model.name" required maxlength="200">
+      </mat-form-field>
+
+      <mat-form-field class="full-width">
+        <mat-label>Court Resource ID</mat-label>
+        <input matInput name="resourceId" [(ngModel)]="model.resourceId" required>
+        <mat-hint>e.g. 241563</mat-hint>
+      </mat-form-field>
+
+      <div class="row">
+        <mat-form-field>
+          <mat-label>Trigger Day</mat-label>
+          <mat-select name="triggerDay" [(ngModel)]="model.triggerDayOfWeek" required>
+            <mat-option *ngFor="let d of days" [value]="d.value">{{ d.label }}</mat-option>
+          </mat-select>
+        </mat-form-field>
+
+        <mat-form-field>
+          <mat-label>Trigger Time (UTC)</mat-label>
+          <input matInput type="time" name="triggerTime"
+                 [ngModel]="model.triggerTime?.substring(0,5)"
+                 (ngModelChange)="model.triggerTime = $event + ':00'"
+                 required>
+        </mat-form-field>
+
+        <mat-form-field>
+          <mat-label>Days in Advance</mat-label>
+          <input matInput type="number" name="daysInAdvance" [(ngModel)]="model.daysInAdvance" min="1" max="365" required>
+        </mat-form-field>
+      </div>
+
+      <div class="row">
+        <mat-form-field>
+          <mat-label>Start Hour</mat-label>
+          <mat-select name="startHour" [(ngModel)]="model.startHour" required>
+            <mat-option *ngFor="let h of hours" [value]="h.value">{{ h.label }}</mat-option>
+          </mat-select>
+        </mat-form-field>
+
+        <mat-form-field>
+          <mat-label>End Hour</mat-label>
+          <mat-select name="endHour" [(ngModel)]="model.endHour" required>
+            <mat-option *ngFor="let h of hours" [value]="h.value">{{ h.label }}</mat-option>
+          </mat-select>
+        </mat-form-field>
+
+        <mat-form-field>
+          <mat-label>Number of Persons</mat-label>
+          <mat-select name="numberOfPersons" [(ngModel)]="model.numberOfPersons" required>
+            <mat-option *ngFor="let p of persons" [value]="p">{{ p }}</mat-option>
+          </mat-select>
+        </mat-form-field>
+      </div>
+
+      <div class="row">
+        <mat-form-field>
+          <mat-label>Retry Count</mat-label>
+          <input matInput type="number" name="retryCount" [(ngModel)]="model.retryCount" min="0" max="10" required>
+        </mat-form-field>
+
+        <mat-form-field>
+          <mat-label>Retry Delay (seconds)</mat-label>
+          <input matInput type="number" name="retryDelaySeconds" [(ngModel)]="model.retryDelaySeconds" min="5" required>
+        </mat-form-field>
+      </div>
+
+      <mat-checkbox name="isActive" [(ngModel)]="model.isActive">Active</mat-checkbox>
+
+    </form>
+  </mat-card-content>
+
+  <mat-card-actions align="end">
+    <button mat-button type="button" (click)="cancel()">Cancel</button>
+    <button mat-raised-button color="primary" type="button" [disabled]="saving || f.invalid" (click)="save()">
+      <mat-icon>save</mat-icon> {{ saving ? 'Saving…' : 'Save' }}
+    </button>
+  </mat-card-actions>
+</mat-card>

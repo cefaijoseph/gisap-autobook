@@ -1,0 +1,7 @@
+.env
+GisapAutobook/bin/
+GisapAutobook/obj/
+GisapAutobook/ClientApp/node_modules/
+GisapAutobook/autobook.db
+GisapAutobook/bot-session/
+GisapAutobook/bot-screenshots/

@@ -1,0 +1,6 @@
+@GisapAutobook_HostAddress = http://localhost:5005
+
+GET {{GisapAutobook_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###

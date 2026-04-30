@@ -1,0 +1,16 @@
+.toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 16px;
+
+  h2 { margin: 0; }
+}
+
+.full-table { width: 100%; }
+
+.spinner-wrap {
+  display: flex;
+  justify-content: center;
+  padding: 48px;
+}

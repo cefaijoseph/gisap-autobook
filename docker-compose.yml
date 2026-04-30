@@ -1,0 +1,26 @@
+services:
+  autobook:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      # Google credentials for GISAP login
+      - Google__Email=${GOOGLE_EMAIL}
+      - Google__Password=${GOOGLE_PASSWORD}
+      # Telegram bot
+      - Telegram__BotToken=${TELEGRAM_BOT_TOKEN}
+      - Telegram__AllowedChatId=${TELEGRAM_ALLOWED_CHAT_ID}
+      # Bot settings
+      - Bot__Headless=true
+      - Bot__StorageStatePath=/data/storage-state.json
+      - Bot__ScreenshotsPath=/data/screenshots
+      # Database
+      - ConnectionStrings__DefaultConnection=Data Source=/data/autobook.db
+    volumes:
+      - autobook_data:/data
+    ports:
+      - "8080:8080"
+
+volumes:
+  autobook_data:
