@@ -9,10 +9,6 @@ COPY GisapAutobook/ GisapAutobook/
 WORKDIR /src/GisapAutobook
 RUN dotnet publish -c Release -o /app/publish --no-restore
 
-# Install Playwright browsers inside the build stage so we can copy them
-RUN dotnet tool install --global Microsoft.Playwright.CLI 2>/dev/null || true
-RUN /app/publish/GisapAutobook playwright install chromium 2>/dev/null || true
-
 # ── Runtime stage ─────────────────────────────────────────────────────────────
 FROM mcr.microsoft.com/dotnet/aspnet:9.0 AS runtime
 WORKDIR /app
@@ -23,6 +19,18 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     gnupg \
     ca-certificates \
     fonts-liberation \
+    libnss3 \
+    libatk1.0-0 \
+    libatk-bridge2.0-0 \
+    libcups2 \
+    libdrm2 \
+    libxkbcommon0 \
+    libxcomposite1 \
+    libxdamage1 \
+    libxfixes3 \
+    libxrandr2 \
+    libgbm1 \
+    libasound2 \
     xdg-utils \
     && wget -q -O /tmp/google-chrome.deb https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb \
     && apt-get install -y --no-install-recommends /tmp/google-chrome.deb \
