@@ -1,0 +1,27 @@
+# .NET build output
+bin/
+obj/
+
+# Secrets and local config
+appsettings.Development.json
+*.user
+*.suo
+
+# SQLite database
+*.db
+*.db-shm
+*.db-wal
+
+# Playwright browser cache and session
+GisapAutobook/bin/Debug/net9.0/bot-screenshots/
+GisapAutobook/bin/Debug/net9.0/bot-session/
+bot-screenshots/
+bot-session/
+
+# Node / Angular (removed but just in case)
+node_modules/
+
+# IDE
+.vs/
+.vscode/
+*.DS_Store
