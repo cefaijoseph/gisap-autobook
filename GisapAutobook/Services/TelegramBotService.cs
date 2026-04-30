@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Text;
+using GisapAutobook.Bot;
 using GisapAutobook.Data;
 using GisapAutobook.Models;
 using Microsoft.EntityFrameworkCore;
@@ -8,6 +9,7 @@ using Telegram.Bot.Polling;
 using Telegram.Bot.Types;
 using Telegram.Bot.Types.Enums;
 using Telegram.Bot.Types.ReplyMarkups;
+using TgFile = Telegram.Bot.Types.File;
 
 namespace GisapAutobook.Services;
 
@@ -185,6 +187,14 @@ public class TelegramBotService : IHostedService, ITelegramNotifier
                     await SendHtmlAsync(chatId, "Usage: /runnow &lt;id&gt;", ct);
                 break;
 
+            case "/testlogin":
+                await TestLoginAsync(chatId, ct);
+                break;
+
+            case "/sessionstatus":
+                await SendSessionStatusAsync(chatId, ct);
+                break;
+
             default:
                 await SendTextAsync(chatId, "Unknown command. Send /help.", ct);
                 break;
@@ -209,6 +219,8 @@ public class TelegramBotService : IHostedService, ITelegramNotifier
             /newschedule — Schedule a new padel booking
             /delete &lt;id&gt; — Cancel a pending booking
             /runnow &lt;id&gt; — Trigger a booking immediately (test)
+            /testlogin — Open browser to log in and save session (run locally for 2FA)
+            /sessionstatus — Check if a saved login session exists
             /cancel — Cancel the current wizard
             """, ct);
 
@@ -453,6 +465,187 @@ public class TelegramBotService : IHostedService, ITelegramNotifier
 
         await SendHtmlAsync(chatId,
             $"⏱ <b>{s.Name}</b> will run within the next minute.\nYou'll get a notification with the result.", ct);
+    }
+
+    // ── Session status ────────────────────────────────────────────────────────
+
+    private Task SendSessionStatusAsync(long chatId, CancellationToken ct)
+    {
+        var storageStatePath = GisapBot.ResolveSessionPath(_config);
+        if (!System.IO.File.Exists(storageStatePath))
+            return SendHtmlAsync(chatId,
+                "⚠️ <b>No session file found</b>\n\n" +
+                "Run /testlogin to open a browser, approve the Google sign-in on your phone, " +
+                "and the session will be saved automatically.", ct);
+
+        var info = new FileInfo(storageStatePath);
+        var expiry = GisapBot.ParseSessionExpiry(_config);
+
+        string expiryLine;
+        if (expiry == null)
+        {
+            expiryLine = "⚠️ Could not determine expiry (no dated Google cookies found)";
+        }
+        else
+        {
+            var daysLeft = (expiry.Value - DateTime.UtcNow).TotalDays;
+            var emoji = daysLeft < 7 ? "🔴" : daysLeft < 30 ? "🟡" : "🟢";
+            expiryLine = $"{emoji} Expires: <b>{expiry.Value:dd MMM yyyy}</b> ({(int)daysLeft} days from now)";
+        }
+
+        return SendHtmlAsync(chatId,
+            $"✅ <b>Session file exists</b>\n" +
+            $"Saved: {info.LastWriteTimeUtc:dd MMM yyyy HH:mm} UTC\n" +
+            $"{expiryLine}\n\n" +
+            $"Use /testlogin to refresh the session.", ct);
+    }
+
+    // ── Test login ────────────────────────────────────────────────────────────
+
+    private async Task TestLoginAsync(long chatId, CancellationToken ct)
+    {
+        await SendHtmlAsync(chatId, "🔍 Checking session...", ct);
+
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                using var playwright = await Microsoft.Playwright.Playwright.CreateAsync();
+                var headless = _config.GetValue("Bot:Headless", true);
+                var browser = await playwright.Chromium.LaunchAsync(new Microsoft.Playwright.BrowserTypeLaunchOptions
+                {
+                    Headless = headless,
+                    Channel = "chrome",
+                    Args = new[]
+                    {
+                        "--disable-blink-features=AutomationControlled",
+                        "--no-sandbox",
+                        "--disable-dev-shm-usage"
+                    }
+                });
+
+                var storageStatePath = GisapBot.ResolveSessionPath(_config);
+                Directory.CreateDirectory(Path.GetDirectoryName(storageStatePath)!);
+
+                var contextOptions = new Microsoft.Playwright.BrowserNewContextOptions
+                {
+                    UserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+                    ViewportSize = new Microsoft.Playwright.ViewportSize { Width = 1280, Height = 800 }
+                };
+                if (System.IO.File.Exists(storageStatePath))
+                    contextOptions.StorageStatePath = storageStatePath;
+
+                var context = await browser.NewContextAsync(contextOptions);
+                await context.AddInitScriptAsync("Object.defineProperty(navigator, 'webdriver', { get: () => undefined });");
+
+                var page = await context.NewPageAsync();
+
+                await page.GotoAsync("https://gisap.gov.mt", new Microsoft.Playwright.PageGotoOptions { WaitUntil = Microsoft.Playwright.WaitUntilState.Load, Timeout = 30000 });
+
+                var hamburger = page.Locator("[aria-label='Toggle Menu']");
+                if (await hamburger.IsVisibleAsync())
+                    await hamburger.ClickAsync();
+
+                // Session is valid — already logged in
+                var myAccount = page.Locator("a:has-text('My Account'), a:has-text('my account')");
+                if (await myAccount.CountAsync() > 0)
+                {
+                    await context.StorageStateAsync(new Microsoft.Playwright.BrowserContextStorageStateOptions { Path = storageStatePath });
+                    await browser.CloseAsync();
+
+                    var expiry = GisapBot.ParseSessionExpiry(_config);
+                    var expiryLine = expiry.HasValue
+                        ? $"\nExpires: <b>{expiry.Value:dd MMM yyyy}</b> ({(int)(expiry.Value - DateTime.UtcNow).TotalDays} days from now)"
+                        : "\nExpiry could not be determined from cookies.";
+
+                    await SendHtmlAsync(chatId, $"✅ <b>Session is valid</b>{expiryLine}", ct);
+                    return;
+                }
+
+                // Session expired or missing — need to log in
+                await SendHtmlAsync(chatId,
+                    "⚠️ Session expired or not found — starting login.\n" +
+                    "Accept the Google approval on your phone within 3 minutes.", ct);
+
+                var email = _config["Google:Email"] ?? "";
+                var password = _config["Google:Password"] ?? "";
+
+                await page.WaitForSelectorAsync("a:has-text('Login'), button:has-text('Login')",
+                    new Microsoft.Playwright.PageWaitForSelectorOptions { Timeout = 15000 });
+                await page.ClickAsync("a:has-text('Login'), button:has-text('Login')");
+                await page.WaitForSelectorAsync("text=e-ID or Social Account", new Microsoft.Playwright.PageWaitForSelectorOptions { Timeout = 15000 });
+                await page.ClickAsync("text=e-ID or Social Account");
+
+                // After clicking e-ID, the site may auto-login or show the Google button
+                await page.WaitForTimeoutAsync(2000);
+
+                // Re-check hamburger after possible redirect
+                if (await hamburger.IsVisibleAsync())
+                    await hamburger.ClickAsync();
+
+                if (await page.Locator("a:has-text('My Account'), a:has-text('my account')").CountAsync() > 0)
+                {
+                    // Auto-logged in — save and report
+                    await context.StorageStateAsync(new Microsoft.Playwright.BrowserContextStorageStateOptions { Path = storageStatePath });
+                    await browser.CloseAsync();
+
+                    var expiryAuto = GisapBot.ParseSessionExpiry(_config);
+                    var expiryNoteAuto = expiryAuto.HasValue
+                        ? $"\nExpires: <b>{expiryAuto.Value:dd MMM yyyy}</b> ({(int)(expiryAuto.Value - DateTime.UtcNow).TotalDays} days from now)"
+                        : "";
+                    await SendHtmlAsync(chatId, $"✅ <b>Login successful!</b>{expiryNoteAuto}", ct);
+                    return;
+                }
+
+                await page.WaitForSelectorAsync("text=Google", new Microsoft.Playwright.PageWaitForSelectorOptions { Timeout = 15000 });
+                await page.ClickAsync("text=Google");
+
+                // After clicking Google, the site may auto-login back to GISAP or go to OAuth
+                await page.WaitForURLAsync(
+                    new System.Text.RegularExpressions.Regex(@"accounts\.google\.com|gisap\.gov\.mt"),
+                    new Microsoft.Playwright.PageWaitForURLOptions { Timeout = 20000 });
+
+                if (await hamburger.IsVisibleAsync())
+                    await hamburger.ClickAsync();
+
+                if (await page.Locator("a:has-text('My Account'), a:has-text('my account')").CountAsync() > 0)
+                {
+                    // Auto-logged in after Google click
+                    await context.StorageStateAsync(new Microsoft.Playwright.BrowserContextStorageStateOptions { Path = storageStatePath });
+                    await browser.CloseAsync();
+
+                    var expiryAutoG = GisapBot.ParseSessionExpiry(_config);
+                    var expiryNoteAutoG = expiryAutoG.HasValue
+                        ? $"\nExpires: <b>{expiryAutoG.Value:dd MMM yyyy}</b> ({(int)(expiryAutoG.Value - DateTime.UtcNow).TotalDays} days from now)"
+                        : "";
+                    await SendHtmlAsync(chatId, $"✅ <b>Login successful!</b>{expiryNoteAutoG}", ct);
+                    return;
+                }
+
+                await page.WaitForSelectorAsync("input[type='email']", new Microsoft.Playwright.PageWaitForSelectorOptions { Timeout = 15000 });
+                await page.FillAsync("input[type='email']", email);
+                await page.ClickAsync("#identifierNext, button:has-text('Next')");
+                await page.WaitForSelectorAsync("input[type='password']:visible", new Microsoft.Playwright.PageWaitForSelectorOptions { Timeout = 15000 });
+                await page.FillAsync("input[type='password']", password);
+                await page.ClickAsync("#passwordNext, button:has-text('Next')");
+
+                await page.WaitForURLAsync("**/gisap.gov.mt/**", new Microsoft.Playwright.PageWaitForURLOptions { Timeout = 180000 });
+
+                await context.StorageStateAsync(new Microsoft.Playwright.BrowserContextStorageStateOptions { Path = storageStatePath });
+                await browser.CloseAsync();
+
+                var expiryAfterLogin = GisapBot.ParseSessionExpiry(_config);
+                var expiryNoteAfterLogin = expiryAfterLogin.HasValue
+                    ? $"\nExpires: <b>{expiryAfterLogin.Value:dd MMM yyyy}</b> ({(int)(expiryAfterLogin.Value - DateTime.UtcNow).TotalDays} days from now)"
+                    : "";
+
+                await SendHtmlAsync(chatId, $"✅ <b>Login successful!</b>{expiryNoteAfterLogin}", ct);
+            }
+            catch (Exception ex)
+            {
+                await SendHtmlAsync(chatId, $"❌ <b>Login failed:</b>\n<i>{ex.Message}</i>", ct);
+            }
+        }, ct);
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────

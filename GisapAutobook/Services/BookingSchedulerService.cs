@@ -12,6 +12,7 @@ public class BookingSchedulerService : BackgroundService
     private readonly ITelegramNotifier _notifier;
     private readonly IConfiguration _config;
     private readonly SchedulerWakeService _wake;
+    private DateTime _lastExpiryCheckDate = DateTime.MinValue;
 
     public BookingSchedulerService(
         IServiceScopeFactory scopeFactory,
@@ -33,6 +34,7 @@ public class BookingSchedulerService : BackgroundService
 
         while (!stoppingToken.IsCancellationRequested)
         {
+            await CheckSessionExpiryAsync(stoppingToken);
             try
             {
                 await ProcessDueSchedulesAsync(stoppingToken);
@@ -94,6 +96,26 @@ public class BookingSchedulerService : BackgroundService
         {
             return TimeSpan.FromSeconds(60);
         }
+    }
+
+    private async Task CheckSessionExpiryAsync(CancellationToken ct)
+    {
+        var today = DateTime.UtcNow.Date;
+        if (_lastExpiryCheckDate >= today) return;
+        _lastExpiryCheckDate = today;
+
+        var expiry = GisapBot.ParseSessionExpiry(_config);
+        if (expiry == null) return;
+
+        var daysLeft = (expiry.Value - DateTime.UtcNow).TotalDays;
+        if (daysLeft > 14) return;
+
+        var emoji = daysLeft < 3 ? "🔴" : daysLeft < 7 ? "🟡" : "🟠";
+        await _notifier.NotifyAsync(
+            $"{emoji} <b>Session expiry warning</b>\n" +
+            $"Your Google login session expires on <b>{expiry.Value:dd MMM yyyy}</b> " +
+            $"({(int)daysLeft} days from now).\n\n" +
+            $"Run /testlogin now to renew it before the bot stops working.", ct);
     }
 
     private async Task ProcessDueSchedulesAsync(CancellationToken ct)

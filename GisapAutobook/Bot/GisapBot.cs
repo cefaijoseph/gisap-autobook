@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Microsoft.Playwright;
 
 namespace GisapAutobook.Bot;
@@ -155,16 +156,47 @@ public class GisapBot
             new PageWaitForSelectorOptions { Timeout = 15000 });
         await page.ClickAsync("text=e-ID or Social Account");
 
+        // After clicking e-ID, the site may either show the Google button OR log in directly.
+        // Wait up to 5s for either outcome before deciding which path to take.
+        _logger.LogInformation("Waiting for Google button or direct login");
+        await page.WaitForTimeoutAsync(2000);
+
+        // Open hamburger if needed (could be on any viewport after redirect)
+        var hamburgerCheck = page.Locator("[aria-label='Toggle Menu']");
+        if (await hamburgerCheck.IsVisibleAsync())
+            await hamburgerCheck.ClickAsync();
+
+        if (await page.Locator("a:has-text('My Account'), a:has-text('my account')").CountAsync() > 0)
+        {
+            // e-ID clicked and site auto-logged us in — session already active
+            _logger.LogInformation("Auto-logged in after e-ID click — skipping Google OAuth");
+            await context.StorageStateAsync(new BrowserContextStorageStateOptions { Path = storageStatePath });
+            _logger.LogInformation("Session state saved to {Path}", storageStatePath);
+            return;
+        }
+
         // Click the Google button that appears after the e-ID modal
-        _logger.LogInformation("Waiting for Google button");
         await page.WaitForSelectorAsync("text=Google",
             new PageWaitForSelectorOptions { Timeout = 15000 });
         await page.ClickAsync("text=Google");
 
-        // Wait for redirect to Google OAuth
-        _logger.LogInformation("Waiting for Google OAuth redirect");
-        await page.WaitForURLAsync("**/accounts.google.com/**",
+        // After clicking Google, the site may auto-login back to GISAP or go to OAuth
+        _logger.LogInformation("Waiting for redirect after Google click");
+        await page.WaitForURLAsync(
+            new System.Text.RegularExpressions.Regex(@"accounts\.google\.com|gisap\.gov\.mt"),
             new PageWaitForURLOptions { Timeout = 20000 });
+
+        var hamburgerCheck2 = page.Locator("[aria-label='Toggle Menu']");
+        if (await hamburgerCheck2.IsVisibleAsync())
+            await hamburgerCheck2.ClickAsync();
+
+        if (await page.Locator("a:has-text('My Account'), a:has-text('my account')").CountAsync() > 0)
+        {
+            _logger.LogInformation("Auto-logged in after Google click — skipping credentials");
+            await context.StorageStateAsync(new BrowserContextStorageStateOptions { Path = storageStatePath });
+            _logger.LogInformation("Session state saved to {Path}", storageStatePath);
+            return;
+        }
 
         // Enter email
         await page.WaitForSelectorAsync("input[type='email']", new PageWaitForSelectorOptions { Timeout = 15000 });
@@ -333,6 +365,42 @@ public class GisapBot
         Path.IsPathRooted(relativePath)
             ? relativePath
             : Path.Combine(AppContext.BaseDirectory, relativePath);
+
+    public static string ResolveSessionPath(IConfiguration config) =>
+        ResolvePath(config["Bot:StorageStatePath"] ?? Path.Combine("bot-session", "storage-state.json"));
+
+    /// <summary>
+    /// Returns the earliest expiry of Google auth cookies in the saved session,
+    /// or null if the file doesn't exist / can't be parsed.
+    /// </summary>
+    public static DateTime? ParseSessionExpiry(IConfiguration config)
+    {
+        var path = ResolveSessionPath(config);
+        if (!File.Exists(path)) return null;
+        try
+        {
+            using var doc = JsonDocument.Parse(File.ReadAllText(path));
+            if (!doc.RootElement.TryGetProperty("cookies", out var cookies)) return null;
+
+            DateTime? earliest = null;
+            foreach (var cookie in cookies.EnumerateArray())
+            {
+                if (!cookie.TryGetProperty("domain", out var domainEl)) continue;
+                var domain = domainEl.GetString() ?? "";
+                if (!domain.Contains("google.com")) continue;
+
+                if (!cookie.TryGetProperty("expires", out var expiresEl)) continue;
+                var expiresUnix = expiresEl.GetDouble();
+                if (expiresUnix <= 0) continue; // session-only cookie
+
+                var expiry = DateTimeOffset.FromUnixTimeSeconds((long)expiresUnix).UtcDateTime;
+                if (earliest == null || expiry < earliest)
+                    earliest = expiry;
+            }
+            return earliest;
+        }
+        catch { return null; }
+    }
 }
 
 public class SlotUnavailableException : Exception
