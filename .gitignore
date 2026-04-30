@@ -6,6 +6,7 @@ obj/
 appsettings.Development.json
 *.user
 *.suo
+.env
 
 # SQLite database
 *.db
