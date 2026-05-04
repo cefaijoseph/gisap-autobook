@@ -8,6 +8,12 @@ public class GisapBot
     private readonly IConfiguration _config;
     private readonly ILogger<GisapBot> _logger;
     private DateTime? _addToCartClickedAt;
+    private DateTime _botStartedAt;
+    private DateTime _formReadyAt;
+    private DateTime _windowOpensUtc;
+    private DateTime _botStartedAt;
+    private DateTime _formReadyAt;
+    private DateTime _windowOpensUtc;
 
     private const string GisapBaseUrl = "https://gisap.gov.mt";
 
@@ -28,10 +34,12 @@ public class GisapBot
         if (dryRun)
             _logger.LogWarning("[DRY RUN] Checkout step will be skipped — no real booking will be made.");
 
-        Directory.CreateDirectory(Path.GetDirectoryName(storageStatePath)!);
+        Directory.CreateDirectory(Path.GetDirectoryName(storag
+        _botStartedAt = DateTime.UtcNow;eStatePath)!);
         Directory.CreateDirectory(screenshotsDir);
 
         using var playwright = await Playwright.CreateAsync();
+        _botStartedAt = DateTime.UtcNow;
         var browser = await playwright.Chromium.LaunchAsync(new BrowserTypeLaunchOptions
         {
             Headless = headless,
@@ -66,21 +74,21 @@ public class GisapBot
 
         var page = await context.NewPageAsync();
 
-        try
+        try, _botStartedAt, _formReadyAt, _windowOpensUtc, 1
         {
             await CheckAndLoginAsync(page, context, storageStatePath);
             await NavigateAndBookAsync(page, request, dryRun, ct);
-            return BookingResult.Success(_addToCartClickedAt ?? DateTime.UtcNow);
-        }
+            return BookingResult.Success(_addToCartClickedAt ?? DateTime.UtcNow, _botStartedAt, _formReadyAt, _windowOpensUtc, 1);
+        }, _botStartedAt, _formReadyAt, _windowOpensUtc, 1
         catch (SlotUnavailableException)
         {
             _logger.LogWarning("Schedule {ScheduleId}: slot already taken, stopping without retry", request.ScheduleId);
-            return BookingResult.AlreadyBooked(_addToCartClickedAt ?? DateTime.UtcNow);
-        }
+            return BookingResult.AlreadyBooked(_addToCartClickedAt ?? DateTime.UtcNow, _botStartedAt, _formReadyAt, _windowOpensUtc, 1);
+        }_botStartedAt, _formReadyAt, _windowOpensUtc
         catch (SlotNotOpenYetException)
         {
             _logger.LogWarning("Schedule {ScheduleId}: booking window not open yet", request.ScheduleId);
-            return BookingResult.NotOpenYet();
+            return BookingResult.NotOpenYet(_botStartedAt, _formReadyAt, _windowOpensUtc);
         }
         catch (Exception ex)
         {
@@ -231,29 +239,31 @@ public class GisapBot
         var reservationUrl =
             $"{GisapBaseUrl}/reservations/?resource_id={request.ResourceId}&mode=reserve&planyo_lang=EN";
 
-        // Compute the booking window open time up-front
-        var maltaTz = TimeZoneInfo.FindSystemTimeZoneById("Europe/Malta");
-        var slotLocalDt = DateTime.SpecifyKind(request.BookingDate.Date.AddHours(request.StartHour), DateTimeKind.Unspecified);
-        var slotUtc = TimeZoneInfo.ConvertTimeToUtc(slotLocalDt, maltaTz);
-        var windowOpensUtc = slotUtc.AddDays(-14);
+        _windowOpensUtc = slotUtc.AddDays(-14);
 
         int retryCount = _config.GetValue("Bot:RetryCount", 9);
         int maxAttempts = retryCount + 1;
 
         // Navigate and fill form
         await NavigateAndFillFormAsync(page, request, reservationUrl);
+        _formReadyAt = DateTime.UtcNow
+        int maxAttempts = retryCount + 1;
 
-        // Coarse wait — Task.Delay until 50ms before window opens
-        var coarseWait = windowOpensUtc - DateTime.UtcNow - TimeSpan.FromMilliseconds(50);
+        // Navigate and f_windowOpensUtc - DateTime.UtcNow - TimeSpan.FromMilliseconds(50);
         if (coarseWait > TimeSpan.Zero)
         {
             _logger.LogInformation("Form ready. Waiting until booking window opens at {Time:HH:mm:ss.fff} UTC",
-                windowOpensUtc);
+                _windowOpensUtc);
             await Task.Delay(coarseWait, ct);
         }
 
         // Spin-wait the last ≤50ms for tight precision
-        while (DateTime.UtcNow < windowOpensUtc)
+        while (DateTime.UtcNow < _
+            await Task.Delay(coarseWait, ct);
+        }
+
+        // Spin-wait the last ≤50ms for tight precision
+        while (DateTime.UtcNow < _windowOpensUtc)
             ct.ThrowIfCancellationRequested();
 
         // --- Add to cart (with retry + re-navigation if window not open yet) ---

@@ -224,31 +224,44 @@ public class BookingSchedulerService : BackgroundService
 
         // Telegram notification
         string telegramMsg;
-        var clickedAtStr = result.AddToCartClickedAt.HasValue
-            ? $"\n⏱ Add to cart clicked at: <code>{result.AddToCartClickedAt.Value:HH:mm:ss.fff} UTC</code>"
+        var windowOpensStr = result.WindowOpensUtc.HasValue
+            ? $"\n🎯 Window opened at: <code>{result.WindowOpensUtc.Value:HH:mm:ss.fff} UTC</code>"
             : "";
+        var clickedAtStr = result.AddToCartClickedAt.HasValue && result.WindowOpensUtc.HasValue
+            ? $"\n⏱ Add to cart at: <code>{result.AddToCartClickedAt.Value:HH:mm:ss.fff} UTC</code> " +
+              $"(+{(result.AddToCartClickedAt.Value - result.WindowOpensUtc.Value).TotalMilliseconds:F0}ms late)"
+            : result.AddToCartClickedAt.HasValue
+                ? $"\n⏱ Add to cart at: <code>{result.AddToCartClickedAt.Value:HH:mm:ss.fff} UTC</code>"
+                : "";
+        var timingStr = "";
+        if (result.BotStartedAt.HasValue && result.FormReadyAt.HasValue)
+            timingStr = $"\n🚀 Bot started: <code>{result.BotStartedAt.Value:HH:mm:ss.fff} UTC</code>" +
+                        $"\n📋 Form ready: <code>{result.FormReadyAt.Value:HH:mm:ss.fff} UTC</code>";
+
         if (result.IsSuccess)
             telegramMsg = $"✅ <b>Booking succeeded!</b>\n" +
                           $"<b>{trackedSchedule.Name}</b>\n" +
                           $"Court <code>{request.ResourceId}</code> · {bookingDate}\n" +
                           $"Slot: <b>{request.StartHour}:00–{request.EndHour}:00</b> · {request.NumberOfPersons} persons" +
-                          clickedAtStr;
+                          timingStr + windowOpensStr + clickedAtStr;
         else if (result.IsAlreadyBooked)
             telegramMsg = $"⚠️ <b>Slot already taken!</b>\n" +
                           $"<b>{trackedSchedule.Name}</b>\n" +
                           $"{bookingDate} {request.StartHour}:00–{request.EndHour}:00\n" +
                           $"Someone else already booked this slot." +
-                          clickedAtStr;
+                          timingStr + windowOpensStr + clickedAtStr;
         else if (result.IsNotOpenYet)
             telegramMsg = $"⏳ <b>Booking window never opened</b> after {maxAttempts} attempt(s)\n" +
                           $"<b>{trackedSchedule.Name}</b>\n" +
                           $"{bookingDate} {request.StartHour}:00–{request.EndHour}:00\n" +
-                          $"The slot may not be available yet. Try again with /runnow {trackedSchedule.Id}.";
+                          $"The slot may not be available yet. Try again with /runnow {trackedSchedule.Id}." +
+                          timingStr + windowOpensStr;
         else
             telegramMsg = $"❌ <b>Booking failed!</b>\n" +
                           $"<b>{trackedSchedule.Name}</b>\n" +
                           $"Court <code>{request.ResourceId}</code> · {bookingDate}\n" +
-                          $"<i>{result.ErrorMessage}</i>";
+                          $"<i>{result.ErrorMessage}</i>" +
+                          timingStr;
 
         await _notifier.NotifyAsync(telegramMsg, ct);
 
