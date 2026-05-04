@@ -231,42 +231,7 @@ public class GisapBot
         var reservationUrl =
             $"{GisapBaseUrl}/reservations/?resource_id={request.ResourceId}&mode=reserve&planyo_lang=EN";
 
-        _logger.LogInformation("Navigating to reservation page {Url}", reservationUrl);
-        await page.GotoAsync(reservationUrl, new PageGotoOptions { WaitUntil = WaitUntilState.Load, Timeout = 30000 });
-
-        // --- Date ---
-        var dateStr = request.BookingDate.ToString("yyyy-MM-dd");
-        _logger.LogInformation("Setting booking date to {Date}", dateStr);
-
-        var dateLocator = page.Locator("#one_date");
-        await dateLocator.WaitForAsync(new LocatorWaitForOptions { Timeout = 15000 });
-
-        // Clear existing value and set the date
-        await dateLocator.ClickAsync(new LocatorClickOptions { ClickCount = 3 });
-        await dateLocator.FillAsync(dateStr);
-        await dateLocator.EvaluateAsync("el => el.dispatchEvent(new Event('change', { bubbles: true }))");
-
-        // --- Number of persons ---
-        _logger.LogInformation("Setting number of persons to 4");
-        await page.SelectOptionAsync("#rental_prop_persons", "4");
-        await page.WaitForLoadStateAsync(LoadState.DOMContentLoaded);
-
-        // --- Start time ---
-        _logger.LogInformation("Setting start time to {Hour}:00", request.StartHour);
-        await page.SelectOptionAsync("#start_time", request.StartHour.ToString());
-        await page.WaitForLoadStateAsync(LoadState.DOMContentLoaded);
-
-        // --- End time ---
-        _logger.LogInformation("Setting end time to {Hour}:00", request.EndHour);
-        await page.SelectOptionAsync("#end_time", request.EndHour.ToString());
-        await page.WaitForLoadStateAsync(LoadState.DOMContentLoaded);
-
-        // --- Terms & Conditions ---
-        _logger.LogInformation("Accepting Terms & Conditions");
-        await page.CheckAsync("#rental_prop_I_agree_with_GISAP_Terms_and_Conditions");
-
-        // --- Wait until exactly 1 second before the booking window opens ---
-        // The window opens at BookingDate+StartHour Malta time, exactly 14 days before the slot.
+        // Compute the booking window open time up-front
         var maltaTz = TimeZoneInfo.FindSystemTimeZoneById("Europe/Malta");
         var slotLocalDt = DateTime.SpecifyKind(request.BookingDate.Date.AddHours(request.StartHour), DateTimeKind.Unspecified);
         var slotUtc = TimeZoneInfo.ConvertTimeToUtc(slotLocalDt, maltaTz);
@@ -275,6 +240,10 @@ public class GisapBot
         int retryCount = _config.GetValue("Bot:RetryCount", 9);
         int maxAttempts = retryCount + 1;
 
+        // Navigate and fill form
+        await NavigateAndFillFormAsync(page, request, reservationUrl);
+
+        // Coarse wait — Task.Delay until 50ms before window opens
         var coarseWait = windowOpensUtc - DateTime.UtcNow - TimeSpan.FromMilliseconds(50);
         if (coarseWait > TimeSpan.Zero)
         {
@@ -283,25 +252,19 @@ public class GisapBot
             await Task.Delay(coarseWait, ct);
         }
 
-        // Spin-wait the last ≤50ms for tight precision (Task.Delay is ~15ms imprecise on Windows)
+        // Spin-wait the last ≤50ms for tight precision
         while (DateTime.UtcNow < windowOpensUtc)
-        {
             ct.ThrowIfCancellationRequested();
-        }
 
-        // --- Add to cart (with tight retry if window not open yet) ---
-        
-
+        // --- Add to cart (with retry + re-navigation if window not open yet) ---
         for (int attempt = 1; attempt <= maxAttempts; attempt++)
         {
-            // _logger.LogInformation("Clicking Add to cart (attempt {Attempt}/{Max})", attempt, maxAttempts);
             _addToCartClickedAt = DateTime.UtcNow;
             await page.ClickAsync(
                 "input[value*='Add to cart'], button:has-text('Add to cart'), a:has-text('Add to cart')");
             await page.WaitForLoadStateAsync(LoadState.DOMContentLoaded);
 
-            // #res_error_msg is populated asynchronously after NetworkIdle — wait briefly for it
-            // so we don't miss error messages when SlowMo is 0.
+            // Wait briefly for #res_error_msg to be populated
             try
             {
                 await page.WaitForFunctionAsync(
@@ -311,10 +274,9 @@ public class GisapBot
             }
             catch (TimeoutException)
             {
-                // No error appeared — booking likely succeeded, continue
+                // No error — booking likely succeeded
             }
 
-            // Read error message from the dedicated error div
             var errorMsg = "";
             var errorDiv = page.Locator("#res_error_msg");
             if (await errorDiv.CountAsync() > 0)
@@ -330,15 +292,16 @@ public class GisapBot
             {
                 if (attempt < maxAttempts)
                 {
-                    _logger.LogWarning("Attempt {Attempt}/{Max}: booking window not open yet — retrying immediately",
+                    _logger.LogWarning("Attempt {Attempt}/{Max}: booking window not open yet — re-navigating and retrying",
                         attempt, maxAttempts);
+                    await NavigateAndFillFormAsync(page, request, reservationUrl);
                     continue;
                 }
                 _logger.LogWarning("Booking window not open yet after {Max} attempts — giving up", maxAttempts);
                 throw new SlotNotOpenYetException();
             }
 
-            // No error detected — Add to Cart succeeded
+            // No error — Add to Cart succeeded
             break;
         }
 
@@ -359,6 +322,36 @@ public class GisapBot
         await page.WaitForLoadStateAsync(LoadState.DOMContentLoaded);
 
         _logger.LogInformation("Booking completed successfully for schedule {ScheduleId}", request.ScheduleId);
+    }
+
+    private async Task NavigateAndFillFormAsync(IPage page, BookingRequest request, string reservationUrl)
+    {
+        _logger.LogInformation("Navigating to reservation page {Url}", reservationUrl);
+        await page.GotoAsync(reservationUrl, new PageGotoOptions { WaitUntil = WaitUntilState.Load, Timeout = 30000 });
+
+        var dateStr = request.BookingDate.ToString("yyyy-MM-dd");
+        _logger.LogInformation("Setting booking date to {Date}", dateStr);
+
+        var dateLocator = page.Locator("#one_date");
+        await dateLocator.WaitForAsync(new LocatorWaitForOptions { Timeout = 15000 });
+        await dateLocator.ClickAsync(new LocatorClickOptions { ClickCount = 3 });
+        await dateLocator.FillAsync(dateStr);
+        await dateLocator.EvaluateAsync("el => el.dispatchEvent(new Event('change', { bubbles: true }))");
+
+        _logger.LogInformation("Setting number of persons to 4");
+        await page.SelectOptionAsync("#rental_prop_persons", "4");
+        await page.WaitForLoadStateAsync(LoadState.DOMContentLoaded);
+
+        _logger.LogInformation("Setting start time to {Hour}:00", request.StartHour);
+        await page.SelectOptionAsync("#start_time", request.StartHour.ToString());
+        await page.WaitForLoadStateAsync(LoadState.DOMContentLoaded);
+
+        _logger.LogInformation("Setting end time to {Hour}:00", request.EndHour);
+        await page.SelectOptionAsync("#end_time", request.EndHour.ToString());
+        await page.WaitForLoadStateAsync(LoadState.DOMContentLoaded);
+
+        _logger.LogInformation("Accepting Terms & Conditions");
+        await page.CheckAsync("#rental_prop_I_agree_with_GISAP_Terms_and_Conditions");
     }
 
     private static string ResolvePath(string relativePath) =>

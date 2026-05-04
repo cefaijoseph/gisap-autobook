@@ -123,9 +123,12 @@ public class BookingSchedulerService : BackgroundService
         using var scope = _scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
 
+        // Launch the bot headStartSeconds BEFORE NextRunAt so Chrome is already open,
+        // the form is filled, and the bot is waiting at the Add-to-cart button.
+        var headStartSeconds = _config.GetValue("Bot:TriggerHeadStartSeconds", 60);
         var now = DateTime.UtcNow;
         var dueSchedules = await db.Schedules
-            .Where(s => s.IsActive && s.NextRunAt != null && s.NextRunAt <= now)
+            .Where(s => s.IsActive && s.NextRunAt != null && s.NextRunAt <= now.AddSeconds(headStartSeconds))
             .ToListAsync(ct);
 
         foreach (var schedule in dueSchedules)
