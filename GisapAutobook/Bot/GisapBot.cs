@@ -248,8 +248,14 @@ public class GisapBot
         await NavigateAndFillFormAsync(page, request, reservationUrl);
         _formReadyAt = DateTime.UtcNow;
 
-        // Coarse wait — Task.Delay until 50ms before window opens
-        var coarseWait = _windowOpensUtc - DateTime.UtcNow - TimeSpan.FromMilliseconds(50);
+        // Pre-locate the Add to Cart button so ClickAsync doesn't query the DOM at the critical moment
+        var addToCartLocator = page.Locator(
+            "input[value*='Add to cart'], button:has-text('Add to cart'), a:has-text('Add to cart')")
+            .First;
+        await addToCartLocator.WaitForAsync(new LocatorWaitForOptions { Timeout = 10000 });
+
+        // Coarse wait — Task.Delay until window opens (Linux timer resolution ~1ms, safe without offset)
+        var coarseWait = _windowOpensUtc - DateTime.UtcNow;
         if (coarseWait > TimeSpan.Zero)
         {
             _logger.LogInformation("Form ready. Waiting until booking window opens at {Time:HH:mm:ss.fff} UTC",
@@ -257,7 +263,7 @@ public class GisapBot
             await Task.Delay(coarseWait, ct);
         }
 
-        // Spin-wait the last <=50ms for tight precision
+        // Spin-wait for tight precision
         while (DateTime.UtcNow < _windowOpensUtc)
             ct.ThrowIfCancellationRequested();
 
@@ -265,8 +271,7 @@ public class GisapBot
         for (int attempt = 1; attempt <= maxAttempts; attempt++)
         {
             _addToCartClickedAt = DateTime.UtcNow;
-            await page.ClickAsync(
-                "input[value*='Add to cart'], button:has-text('Add to cart'), a:has-text('Add to cart')");
+            await addToCartLocator.ClickAsync();
             await page.WaitForLoadStateAsync(LoadState.DOMContentLoaded);
 
             // Wait briefly for #res_error_msg to be populated
@@ -300,6 +305,10 @@ public class GisapBot
                     _logger.LogWarning("Attempt {Attempt}/{Max}: booking window not open yet — re-navigating and retrying",
                         attempt, maxAttempts);
                     await NavigateAndFillFormAsync(page, request, reservationUrl);
+                    addToCartLocator = page.Locator(
+                        "input[value*='Add to cart'], button:has-text('Add to cart'), a:has-text('Add to cart')")
+                        .First;
+                    await addToCartLocator.WaitForAsync(new LocatorWaitForOptions { Timeout = 10000 });
                     continue;
                 }
                 _logger.LogWarning("Booking window not open yet after {Max} attempts — giving up", maxAttempts);
