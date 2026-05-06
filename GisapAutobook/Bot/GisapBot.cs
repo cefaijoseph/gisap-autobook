@@ -253,6 +253,8 @@ public class GisapBot
             "input[value*='Add to cart'], button:has-text('Add to cart'), a:has-text('Add to cart')")
             .First;
         await addToCartLocator.WaitForAsync(new LocatorWaitForOptions { Timeout = 10000 });
+        // Resolve to an ElementHandle so we can use JS click (bypasses Playwright actionability checks)
+        var addToCartHandle = await addToCartLocator.ElementHandleAsync();
 
         // Wait on a dedicated LongRunning thread to avoid thread-pool starvation delays.
         // Task.Delay continuation can be queued for seconds when the pool is saturated in Docker.
@@ -261,6 +263,9 @@ public class GisapBot
         var windowTarget = _windowOpensUtc;
         await Task.Factory.StartNew(() =>
         {
+            // Highest priority so the OS won't preempt this thread during the critical window
+            Thread.CurrentThread.Priority = ThreadPriority.Highest;
+
             // Coarse sleep until ~10ms before window opens
             var coarseWait = windowTarget - DateTime.UtcNow - TimeSpan.FromMilliseconds(10);
             if (coarseWait > TimeSpan.Zero)
@@ -275,7 +280,8 @@ public class GisapBot
         for (int attempt = 1; attempt <= maxAttempts; attempt++)
         {
             _addToCartClickedAt = DateTime.UtcNow;
-            await addToCartLocator.ClickAsync();
+            // JS click bypasses Playwright's scroll/visibility/stability checks — fastest path
+            await addToCartHandle!.EvaluateAsync("el => el.click()");
             await page.WaitForLoadStateAsync(LoadState.DOMContentLoaded);
 
             // Wait briefly for #res_error_msg to be populated
@@ -313,6 +319,7 @@ public class GisapBot
                         "input[value*='Add to cart'], button:has-text('Add to cart'), a:has-text('Add to cart')")
                         .First;
                     await addToCartLocator.WaitForAsync(new LocatorWaitForOptions { Timeout = 10000 });
+                    addToCartHandle = await addToCartLocator.ElementHandleAsync();
                     continue;
                 }
                 _logger.LogWarning("Booking window not open yet after {Max} attempts — giving up", maxAttempts);
