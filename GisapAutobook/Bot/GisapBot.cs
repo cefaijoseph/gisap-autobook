@@ -254,18 +254,22 @@ public class GisapBot
             .First;
         await addToCartLocator.WaitForAsync(new LocatorWaitForOptions { Timeout = 10000 });
 
-        // Coarse wait — Task.Delay until window opens (Linux timer resolution ~1ms, safe without offset)
-        var coarseWait = _windowOpensUtc - DateTime.UtcNow;
-        if (coarseWait > TimeSpan.Zero)
+        // Wait on a dedicated LongRunning thread to avoid thread-pool starvation delays.
+        // Task.Delay continuation can be queued for seconds when the pool is saturated in Docker.
+        _logger.LogInformation("Form ready. Waiting until booking window opens at {Time:HH:mm:ss.fff} UTC",
+            _windowOpensUtc);
+        var windowTarget = _windowOpensUtc;
+        await Task.Factory.StartNew(() =>
         {
-            _logger.LogInformation("Form ready. Waiting until booking window opens at {Time:HH:mm:ss.fff} UTC",
-                _windowOpensUtc);
-            await Task.Delay(coarseWait, ct);
-        }
+            // Coarse sleep until ~10ms before window opens
+            var coarseWait = windowTarget - DateTime.UtcNow - TimeSpan.FromMilliseconds(10);
+            if (coarseWait > TimeSpan.Zero)
+                Thread.Sleep(coarseWait);
 
-        // Spin-wait for tight precision
-        while (DateTime.UtcNow < _windowOpensUtc)
-            ct.ThrowIfCancellationRequested();
+            // Spin-wait the last <=10ms
+            while (DateTime.UtcNow < windowTarget)
+                ct.ThrowIfCancellationRequested();
+        }, ct, TaskCreationOptions.LongRunning, TaskScheduler.Default);
 
         // --- Add to cart (with retry + re-navigation if window not open yet) ---
         for (int attempt = 1; attempt <= maxAttempts; attempt++)
