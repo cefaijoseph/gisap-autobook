@@ -266,14 +266,10 @@ public class GisapBot
             // Highest priority so the OS won't preempt this thread during the critical window
             Thread.CurrentThread.Priority = ThreadPriority.Highest;
 
-            // Coarse sleep until ~10ms before window opens
-            var coarseWait = windowTarget - DateTime.UtcNow - TimeSpan.FromMilliseconds(10);
-            if (coarseWait > TimeSpan.Zero)
-                Thread.Sleep(coarseWait);
-
-            // Spin-wait the last <=10ms
-            while (DateTime.UtcNow < windowTarget)
-                ct.ThrowIfCancellationRequested();
+            // Sleep until 50ms after window opens
+            var wait = windowTarget.AddMilliseconds(50) - DateTime.UtcNow;
+            if (wait > TimeSpan.Zero)
+                Thread.Sleep(wait);
         }, ct, TaskCreationOptions.LongRunning, TaskScheduler.Default);
 
         // --- Add to cart (with retry + re-navigation if window not open yet) ---
@@ -312,14 +308,9 @@ public class GisapBot
             {
                 if (attempt < maxAttempts)
                 {
-                    _logger.LogWarning("Attempt {Attempt}/{Max}: booking window not open yet — re-navigating and retrying",
+                    _logger.LogWarning("Attempt {Attempt}/{Max}: booking window not open yet — retrying in 200ms",
                         attempt, maxAttempts);
-                    await NavigateAndFillFormAsync(page, request, reservationUrl);
-                    addToCartLocator = page.Locator(
-                        "input[value*='Add to cart'], button:has-text('Add to cart'), a:has-text('Add to cart')")
-                        .First;
-                    await addToCartLocator.WaitForAsync(new LocatorWaitForOptions { Timeout = 10000 });
-                    addToCartHandle = await addToCartLocator.ElementHandleAsync();
+                    await Task.Delay(100, ct);
                     continue;
                 }
                 _logger.LogWarning("Booking window not open yet after {Max} attempts — giving up", maxAttempts);
